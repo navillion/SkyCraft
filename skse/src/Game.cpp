@@ -611,7 +611,7 @@ namespace skycraft
 			// around them. If it's holding somewhere Skyrim's player isn't, that ground never comes:
 			// send it again to where Skyrim's player really is.
 			static const char* takeover = nullptr;
-			const char*        takeoverNow = a_player->IsDead() ? nullptr : SkyrimTakeover(a_player);
+			const char*        takeoverNow = st.nativeControl ? "manual toggle" : (a_player->IsDead() ? nullptr : SkyrimTakeover(a_player));
 			if ((takeoverNow != nullptr) != (takeover != nullptr)) {
 				if (takeoverNow) {
 					logger::info("Skyrim takes the player ({})", takeoverNow);
@@ -976,7 +976,19 @@ namespace skycraft
 
 			// Tell Minecraft where Skyrim's player is and where they're looking.
 			proto::SkyState sky{};
-			sky.flags = (cell ? proto::kSkyInGame : 0u) | (menu ? proto::kSkyMenuOpen : 0u) | (loading ? proto::kSkyLoading : 0u);
+			auto skyFlags = (cell ? proto::kSkyInGame : 0u) | (menu ? proto::kSkyMenuOpen : 0u) | (loading ? proto::kSkyLoading : 0u);
+			if (auto* skyWeather = RE::Sky::GetSingleton(); skyWeather && cell && !cell->IsInteriorCell()) {
+				if (skyWeather->IsRaining()) {
+					skyFlags |= proto::kSkyRaining;
+				}
+				if (skyWeather->IsSnowing()) {
+					skyFlags |= proto::kSkySnowing;
+				}
+			}
+			sky.flags = skyFlags;
+			if (st.nativeControl) {
+				sky.flags |= proto::kSkyNativeControl;
+			}
 			const auto skyMc = SkyToMc(current);
 			sky.worldId = worldId;
 			sky.collisionEpoch = epoch;
@@ -1296,6 +1308,33 @@ namespace skycraft
 			teleportPending = true;
 			haveLastSet = false;
 			State().lookInitialized = false;
+		}
+
+		void ToggleNativeControl()
+		{
+			auto* player = RE::PlayerCharacter::GetSingleton();
+			if (!player || !player->GetParentCell() || player->IsDead() || !Link::Get().McAlive()) {
+				return;
+			}
+			auto& st = State();
+			st.nativeControl = !st.nativeControl.load();
+			Input::ReleaseAll();
+			float dx, dy;
+			Input::ConsumeLook(dx, dy);
+			st.puppeting = false;
+			st.minecraftOwnsPlayer = !st.nativeControl.load();
+			st.mcCrosshair = false;
+			st.lookInitialized = false;
+			haveLastSet = false;
+			tickHistory.clear();
+			if (!st.nativeControl) {
+				// Resync before accepting another Minecraft position, even for a quick double toggle.
+				teleportPending = true;
+			}
+			Input::SetActivatePromptKey(false);
+			logger::info("F8: {} control", st.nativeControl ? "Skyrim" : "Minecraft");
+			RE::SendHUDMessage::ShowHUDMessage(st.nativeControl ?
+				"SkyCraft: Skyrim controls (F8 to return to Minecraft)" : "SkyCraft: returning to Minecraft controls");
 		}
 	}
 }
